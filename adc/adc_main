@@ -1,0 +1,209 @@
+----------------------------------------------------------------------------------
+-- Company: IIT Roorkee
+-- Engineer: Kalp Garg
+-- 
+-- Create Date:    11:59:42 11/25/2017 
+-- Design Name: 
+-- Module Name:    adc_main - Behavioral 
+-- Project Name: 
+-- Target Devices: 
+-- Tool versions: 
+-- Description: 
+--
+-- Dependencies: 
+--
+-- Revision: 
+-- Revision 0.01 - File Created
+-- Additional Comments: 
+--
+----------------------------------------------------------------------------------
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_ARITH.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+
+-- Uncomment the following library declaration if using
+-- arithmetic functions with Signed or Unsigned values
+--use IEEE.NUMERIC_STD.ALL;
+
+-- Uncomment the following library declaration if instantiating
+-- any Xilinx primitives in this code.
+--library UNISIM;
+--use UNISIM.VComponents.all;
+
+entity adc_main is
+Port ( 	done: out STD_LOGIC;		                                      ---
+		SPI_MOSI, DAC_CS, DAC_CLR: out STD_LOGIC;  
+		SPI_SCK: out STD_LOGIC; 			
+		SPI_SS_B, AMP_CS, AD_CONV, SF_CE0, FPGA_INIT_B:out STD_LOGIC; --- DAC SIGNALS
+        SPI_MISO : in  STD_LOGIC;
+        AMP_SHDN : out  STD_LOGIC;
+	   	mclk: in STD_LOGIC;
+			ampl:out signed(7 downto 0);
+			--amplitude2: out STD_LOGIC_VECTOR(13 downto 0);
+			--LED : out std_logic_vector(7 downto 0);
+			switch1 : in std_logic;
+			trigger : out std_logic);
+--			gain_1:out STD_LOGIC_VECTOR(3 downto 0);
+--			gain_2:out STD_LOGIC_VECTOR(3 downto 0));
+end adc_main;
+
+architecture Behavioral of adc_main is
+-------------------State SIGNALS-------------
+type state_type is (set_amp0,idle, set_amp1,set_amp2, read_adc);
+signal state : state_type := set_amp0;
+---------------------------------------------------
+-------------------Clock SIGNALS-------------------
+type state_type_clock is (clock_on, clock_off);
+signal state_clock : state_type_clock := clock_off;
+signal cnt : integer range 0 to 40 := 0;
+signal clk_sample : STD_LOGIC := '0';          ---- 1.5 MHZ clk
+----------------------------------------------------
+-------------------ADC SIGNALS----------------------
+ signal amplitude1: signed(13 downto 0);--- to algorithm
+signal amplitude1_buffer : signed(13 downto 0);
+--signal amplitude1_buffer_n : STD_LOGIC_VECTOR(13 downto 0);
+signal amplitude2_buffer : STD_LOGIC_VECTOR(13 downto 0);
+signal peak_amplitude : signed(13 downto 0) := "00000000000000";
+signal gain1 : STD_LOGIC_VECTOR(3 downto 0) := "0001";
+signal gain2 : STD_LOGIC_VECTOR(3 downto 0) := "0001";
+
+signal risingedge : std_logic := '1';
+signal counter : integer:=0;
+
+signal adc_enable: std_logic:='1';
+signal SPI_SCK_adc: STD_LOGIC;
+signal SPI_SCK_dac: STD_LOGIC;
+
+begin
+------------------1.5MHz clock----------------------
+clock_divider : process (mclk)
+		begin
+		  if(rising_edge(mclk)) then
+		  
+			if(counter = 33) then
+				risingedge <= risingedge xor '1';
+				clk_sample <= clk_sample xor '1';
+				counter <= 0;
+			else
+				counter <= counter + 1;
+			end if;
+		end if; 
+		end process;
+		
+sclk_clock : process(mclk)
+		begin
+	if (adc_enable = '0')	then
+	SPI_SCK <= SPI_SCK_dac;
+	else
+	SPI_SCK <= SPI_SCK_adc;
+	end if;
+	--if(mclk'EVENT) then
+			case state_clock is
+				when clock_on =>
+					SPI_SCK_adc <= clk_sample;
+				when clock_off =>
+					SPI_SCK_adc <= '0';
+				end case; 
+	--end if;
+end process;
+main : process (clk_sample)
+begin
+	if(rising_edge(clk_sample)) then    
+	
+case state is
+----------------------ADC BEGINS----------------	
+when set_amp0 =>
+		DAC_CS 	<= '1';
+		SF_CE0 	<= '1';
+		FPGA_INIT_B <= '1';
+		SPI_SS_B <= '1';
+
+		AMP_CS<='0';
+		state<=set_amp1;
+		SPI_MOSI<='0';
+		
+when set_amp1 =>
+		adc_enable <= '0';
+		AMP_CS <= '0';
+		AMP_SHDN <= '0';
+		
+		SPI_SCK_dac<='0';
+		
+		if (cnt < 4) then
+		SPI_MOSI <= gain2(3 - cnt);
+--		gain_2(3-cnt)<=SPI_MISO;
+		cnt <= cnt + 1;
+		state <= set_amp2;
+		elsif (cnt > 3 and cnt < 8) then
+		SPI_MOSI <= gain1(7 - cnt);
+		--gain_1(7-cnt)<=SPI_MISO;
+		cnt <= cnt + 1;
+		state <= set_amp2;
+		end if;
+		
+		
+when set_amp2=>
+		SPI_SCK_dac <= '1';
+		if(cnt=8) then
+			cnt<=0;
+			state<=idle;
+			AMP_CS<='1';
+		else 
+			state<=set_amp1;
+		end if;
+		
+when idle =>  
+		adc_enable <= '1';
+		state_clock<=clock_off;				-- 13ns delay as specified in manual
+		if (cnt < 2) then
+		AD_CONV <= '1';
+		cnt <= cnt + 1;
+		state <= idle;
+		elsif (cnt = 2) then
+		AD_CONV <= '0';
+		cnt <= cnt+1;
+		elsif(cnt=3) then
+		cnt<=0;
+		state <= read_adc;
+		trigger <= '0';
+		state_clock<=clock_on;	
+		end if;
+	
+when read_adc =>
+		if (cnt < 2) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		state_clock <= clock_on;
+		elsif (cnt > 1 and cnt < 16) then
+		amplitude1_buffer(15 - cnt) <= SPI_MISO;
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 15 and cnt < 18) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 17 and cnt < 32) then
+		amplitude2_buffer(31 - cnt) <= SPI_MISO;
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 31 and cnt < 34) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt = 34) then
+		cnt <= 0;
+		amplitude1<=amplitude1_buffer;
+		state_clock <= clock_off;
+		trigger <= '1';
+		state <= set_amp0;
+		
+		if (switch1 = '1') then
+		ampl( 7 downto 0) <= amplitude1(13 downto 6);
+		else
+		ampl( 7 downto 0) <= amplitude1(7 downto 0);
+		end if;
+	end if;
+end case;
+end if;
+end process;
+end Behavioral;
+
