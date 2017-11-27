@@ -1,0 +1,324 @@
+----------------------------------------------------------------------------------
+-- Company: IIT ROORKEE	
+-- Engineer: KALP GARG
+-- 
+-- Create Date:    11:47:29 11/05/2017 
+-- Design Name: 
+-- Module Name:    adc_algo_dac 
+-- Project Name: Sine Wave Phase Shifting using FPGA
+-- Target Devices: SPARTANN 3E starter Kit
+-- Tool versions: 
+-- Description: USED on Board ADC and DAC
+--
+-- Dependencies: 
+--
+-- Revision: 
+-- Revision 0.01 - File Created
+-- Additional Comments: 
+--
+----------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_ARITH.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+
+library work;
+use work.integer_sq_root.all;
+
+entity adc_algo_dac is
+ Port ( 	done: out STD_LOGIC;		                                      ---
+			SPI_MOSI, DAC_CS, DAC_CLR: out STD_LOGIC;  
+			SPI_SCK: out STD_LOGIC; 			
+			SPI_SS_B, AMP_CS, AD_CONV, SF_CE0, FPGA_INIT_B:out STD_LOGIC; --- DAC SIGNALS
+			SPI_MISO : in  STD_LOGIC;
+			AMP_SHDN : out  STD_LOGIC;
+	   	mclk: in STD_LOGIC;
+			--amplitude2: out STD_LOGIC_VECTOR(13 downto 0);
+			--LED : out std_logic_vector(7 downto 0);
+			trigger : out std_logic;
+			phase : in std_logic_vector(8 downto 0)); --0(000000000) to 360(101101000)
+		  
+end adc_algo_dac;
+
+architecture Behavioral of adc_algo_dac is
+	-------------------State SIGNALS-------------
+	type state_type is (set_amp0,idle, set_amp1,set_amp2, read_adc, algo, dac1, dac2, dac3, dac4, dac5, dac6, dac7, dac8);
+	signal state : state_type := set_amp0;
+	---------------------------------------------------
+	-------------------Clock SIGNALS-------------------
+	type state_type_clock is (clock_on, clock_off);
+	signal state_clock : state_type_clock := clock_off;
+	signal cnt : integer range 0 to 40 := 0;
+	signal clk_sample : STD_LOGIC := '0';          ---- 1.5 MHZ clk
+	----------------------------------------------------
+	-------------------ADC SIGNALS----------------------
+	signal amplitude1: signed(13 downto 0); --- to algorithm
+	signal amplitude1_buffer : signed(13 downto 0);
+	signal amplitude1_buffer_n : STD_LOGIC_VECTOR(13 downto 0);
+	signal amplitude2_buffer : STD_LOGIC_VECTOR(13 downto 0);
+	signal peak_amplitude : signed(13 downto 0) := "00000000000000";
+	signal gain1 : STD_LOGIC_VECTOR(3 downto 0) := "0001";
+	signal gain2 : STD_LOGIC_VECTOR(3 downto 0) := "0001";
+	signal risingedge : std_logic := '1';
+	signal counter : integer range 0 to 34;
+----------------------------------------------------
+-----------------------DAC SIGNALS------------------
+signal data:STD_LOGIC_VECTOR(11 downto 0);
+signal send:STD_LOGIC_VECTOR(31 downto 0);
+signal bit_pos :integer:= 32;	
+----------------------------------------------------
+signal adc_enable: std_logic:='1';
+signal SPI_SCK_adc: STD_LOGIC;
+signal SPI_SCK_dac: STD_LOGIC;
+--signal n:integer:=360;
+--type inter is ARRAY(119 downto 0) of STD_LOGIC_VECTOR(11 downto 0);
+--signal internal :inter;
+--------------------------------------------------
+------------------------ALGO SIGNALS----------------
+Type invta is ARRAY(0 TO 10) of integer;
+SIGNAL invtan: invta:=(45,26,14,7,3,2,1,0,0,0,0);
+SIGNAL power2: invta:=(1,2,4,8,16,32,64,128,256,512,1024);
+
+-----------------------------------------------------
+
+---------------SIGNAL DECLARATION ENDS--------------
+
+-----------------------------------------------------
+begin
+------------------1.5MHz clock----------------------
+clock_divider : process (mclk)
+		begin
+		  if(rising_edge(mclk)) then
+		  
+			if(counter = 33) then
+				risingedge <= risingedge xor '1';
+				clk_sample <= clk_sample xor '1';
+				counter <= 0;
+			else
+				counter <= counter + 1;
+			end if;
+		end if; 
+		end process;
+		
+sclk_clock : process(mclk)
+		begin
+	if (adc_enable = '0')	then
+	SPI_SCK <= SPI_SCK_dac;
+	else
+	SPI_SCK <= SPI_SCK_adc;
+	end if;
+	--if(mclk'EVENT) then
+			case state_clock is
+				when clock_on =>
+					SPI_SCK_adc <= clk_sample;
+				when clock_off =>
+					SPI_SCK_adc <= '0';
+				end case; 
+	--end if;
+end process;
+
+-----------STATE MACHINE STARTS HERE----------------------		
+main : process (clk_sample)
+
+--ALGORUTHM VAR DECLARATION (within process)----------------	
+variable phi:integer;
+variable Qint:integer;
+variable Aint:integer;
+variable Iint:integer;
+variable d:integer;
+variable temp1:std_logic_vector(31 downto 0);
+variable temp:std_logic_vector(31 downto 0);
+variable peak:integer;
+--variable x:integer range 0 to 120;
+------------------------------------------------
+	begin
+	if(rising_edge(clk_sample)) then    
+	
+case state is
+----------------------ADC BEGINS----------------	
+when set_amp0 =>
+		DAC_CS 	<= '1';
+		SF_CE0 	<= '1';
+		FPGA_INIT_B <= '1';
+		SPI_SS_B <= '1';
+
+		AMP_CS<='0';
+		state<=set_amp1;
+		SPI_MOSI<='0';
+		
+when set_amp1 =>
+		adc_enable <= '0';
+		AMP_CS <= '0';
+		AMP_SHDN <= '0';
+		
+		SPI_SCK_dac<='0';
+		
+		if (cnt < 4) then
+		SPI_MOSI <= gain2(3 - cnt);
+		cnt <= cnt + 1;
+		state <= set_amp2;
+		elsif (cnt > 3 and cnt < 8) then
+		SPI_MOSI <= gain1(7 - cnt);
+		cnt <= cnt + 1;
+		state <= set_amp2;
+		end if;
+		
+when set_amp2=>
+		SPI_SCK_dac <= '1';
+		if(cnt=8) then
+			cnt<=0;
+			state<=idle;
+			AMP_CS<='1';
+		else 
+			state<=set_amp1;
+		end if;
+		
+when idle =>  
+		adc_enable <= '1';
+		state_clock<=clock_off;				-- 13ns delay as specified in manual
+		if (cnt < 2) then
+		AD_CONV <= '1';
+		cnt <= cnt + 1;
+		state <= idle;
+		elsif (cnt = 2) then
+		AD_CONV <= '0';
+		cnt <= cnt+1;
+		elsif(cnt=3) then
+		cnt<=0;
+		state <= read_adc;
+		trigger <= '0';
+		state_clock<=clock_on;	
+		end if;
+	
+when read_adc =>
+		if (cnt < 2) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		state_clock <= clock_on;
+		elsif (cnt > 1 and cnt < 16) then
+		amplitude1_buffer(15 - cnt) <= SPI_MISO;
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 15 and cnt < 18) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 17 and cnt < 32) then
+		amplitude2_buffer(31 - cnt) <= SPI_MISO;
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt > 31 and cnt < 34) then
+		cnt <= cnt + 1;
+		state <= read_adc;
+		elsif (cnt = 34) then
+		cnt <= 0;
+		amplitude1<=amplitude1_buffer;
+--		if ( peak_amplitude< amplitude1 ) then 
+--	   peak_amplitude <=  amplitude1;
+--	end if;
+		state_clock <= clock_off;
+		trigger <= '1';
+		state <= algo;
+end if;
+		
+
+----------------PHASE SHIFTING ALGORITHM---------------
+when  algo =>
+	peak:=  conv_integer(peak_amplitude);
+	phi:= (conv_integer(phase)+5)*12;
+	Qint:= conv_integer(amplitude1);
+	Iint:= (peak*peak-Qint*Qint); 	---(2^14 - 1)^2
+	Iint:=conv_integer(sqrt(conv_unsigned(Iint,32)));
+	
+	for i IN 0 TO 10 LOOP
+				if(phi <0 ) then
+					d:= -1;
+				elsif(phi = 0) then
+					d:= 0;
+				else 
+					d:= 1;
+				end if;
+		phi := phi-d*invtan(i);
+		Aint:=Iint-d*Qint/(2**i);
+		Qint:=Qint+d*Iint/(2**i);
+		Iint:=Aint;
+	END LOOP;
+	
+	if(phi = 0) then
+		Qint:=Qint;
+		Iint:=Iint;
+	else
+		Qint:=Qint/2;
+		Iint:=Iint/2;
+	end if;
+
+	temp := conv_std_logic_vector(Qint,32);
+	if(temp(31)='1') then
+	temp1 := (not(temp))+1;
+	else 
+	temp1:=temp;
+	end if;
+	data<=temp1(11 downto 0);	
+--		x:=121-phi;
+--		internal <= conv_std_logic_vector(amplitude1,12) & internal(internal'LEFT DOWNTO x);
+		--- enable dac for the next state ---
+			SPI_SS_B 	<= '1';
+			AMP_CS 		<= '1';
+			AD_CONV 	   <= '0';
+			SF_CE0 		<= '1';
+			FPGA_INIT_B <= '1';
+		-------------------------------------	
+state <= dac1;	
+----------------ALGORITHM STATE ENDS-------------------
+
+
+-------------------DAC BEGINS--------------------------		
+when dac1 =>
+		adc_enable <= '0';         -- enable dac
+		DAC_CS 	<= '1';
+		SPI_MOSI <= '0';
+		SPI_SCK_dac	<= '0';
+		DAC_CLR	<= '1';
+		done 	<= '0';
+		state <= dac2;
+		
+when dac2 =>
+		send <= "0000000000110000" & data & "0000";
+		bit_pos <= 32;
+		state <= dac3;
+		
+when dac3 =>
+		DAC_CS 	<= '0';
+		SPI_SCK_dac	<= '0';				
+		SPI_MOSI <= send(bit_pos - 1 );
+		bit_pos <= bit_pos - 1;		
+		state <= dac4;
+		
+when dac4 =>
+		 SPI_SCK_dac <= '1';
+		if (bit_pos > 0) then
+			state <= dac3;
+		else 
+			state <= dac5;
+		end if;
+						
+when dac5 =>
+		SPI_SCK_dac <= '0';
+		state <= dac6;
+		
+when dac6 =>
+		DAC_CS <= '1';
+		state <= dac7;
+		
+when dac7 =>
+		done <= '1';	
+		state <= dac8;
+		
+when dac8 =>
+		done <= '0';	
+		state <= set_amp0;
+				
+		end case;
+		end if;
+	end process;		
+end Behavioral;
