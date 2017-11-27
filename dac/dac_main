@@ -1,0 +1,123 @@
+----------------------------------------------------------------------------------
+-- Company: IIT Roorkee
+-- Engineer: Kalp Garg
+-- 
+-- Create Date:    10:41:24 11/01/2017 
+-- Design Name: 
+-- Module Name:    main - Behavioral 
+-- Project Name: 
+-- Target Devices: 
+-- Tool versions: 
+-- Description: 
+--
+-- Dependencies: 
+--
+-- Revision: 
+-- Revision 0.01 - File Created
+-- Additional Comments: 
+--
+----------------------------------------------------------------------------------
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_ARITH.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+
+---- Uncomment the following library declaration if instantiating
+---- any Xilinx primitives in this code.
+--library UNISIM;
+--use UNISIM.VComponents.all;
+
+entity main is
+	PORT(clk, enable: in STD_LOGIC;
+	done: out STD_LOGIC;		
+	 	data:in STD_LOGIC_VECTOR(11 downto 0);		
+	SPI_MOSI, DAC_CS, SPI_SCK, DAC_CLR:out STD_LOGIC;
+	SPI_SS_B, AMP_CS, AD_CONV, SF_CE0, FPGA_INIT_B:out STD_LOGIC);
+end main;
+
+architecture Behavioral of main is
+
+	signal Cs :STD_LOGIC_VECTOR(2 downto 0):= "000";
+	signal send:STD_LOGIC_VECTOR(31 downto 0);
+	signal bit_pos :integer:= 32;	
+begin
+PROCESS(clk) begin
+	if(rising_edge(clk)) then
+	
+		if (enable = '1') then
+			
+			SPI_SS_B 	<= '1';
+			AMP_CS 		<= '1';
+			AD_CONV 		<= '0';
+			SF_CE0 		<= '1';
+			FPGA_INIT_B <= '1';
+
+			case Cs is
+				when "000" =>
+						DAC_CS 	<= '1';
+						SPI_MOSI <= '0';
+						SPI_SCK	<= '0';
+						DAC_CLR	<= '1';
+						done 		<= '0';
+						Cs <= Cs + 1;
+						
+				when "001" =>
+						send <= "0000000000110000"& data & "0000";
+						bit_pos <= 32;
+						Cs <= Cs + 1;
+						
+				when "010" =>
+						DAC_CS 	<= '0';
+						SPI_SCK	<= '0';				
+						SPI_MOSI <= send(bit_pos - 1 );
+						bit_pos <= bit_pos - 1;
+						Cs <= Cs + 1;
+					
+				when "011" =>
+						if (bit_pos > 0) then
+							SPI_SCK <= '1';
+							Cs <= "010";
+						 else 
+							SPI_SCK <= '1';
+							Cs <= Cs + 1;
+						end if;
+						
+				when "100" =>
+						SPI_SCK <= '0';
+						Cs <= Cs + 1;
+						
+				when "101" =>
+						DAC_CS <= '1';
+						Cs <= Cs + 1;
+						
+				when "110" =>
+						done <= '1';	
+						Cs <= Cs + 1;
+						
+				when "111" =>
+						done <= '0';	
+						Cs <= "001";
+						
+				when others =>
+						DAC_CS 	<= '1';
+						SPI_MOSI <= '0';
+						SPI_SCK	<= '0';
+						DAC_CLR	<= '1';
+			end CASE;
+			
+		else 
+			
+			DAC_CS 	<= '1';
+			SPI_MOSI <= '0';
+			SPI_SCK	<= '0';
+			DAC_CLR	<= '1';
+			done 		<= '0';
+			Cs 		<= "000";
+			bit_pos 	<= 32;
+		end if;
+		
+	end if;
+	end process;
+
+end Behavioral;
+
